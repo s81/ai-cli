@@ -46,6 +46,7 @@ jobs:
           fi
 
       - name: Configure
+        shell: bash
         run: >
           cmake -B build -S .
           -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake
