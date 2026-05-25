@@ -1,5 +1,7 @@
-#include <cstdio>
+#include "app.h"
+
 int main() {
-    std::printf("ai-cli v0.1.0\n");
+    App app;
+    app.run();
     return 0;
 }
