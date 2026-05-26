@@ -242,6 +242,7 @@ void App::run() {
                 show_dialog_ = false;
                 return true;
             }
+            return dialog_form->OnEvent(ev);
         }
         return false;
     });
