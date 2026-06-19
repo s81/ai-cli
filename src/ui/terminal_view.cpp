@@ -1,5 +1,6 @@
 #include "terminal_view.h"
 #include <ftxui/dom/elements.hpp>
+#include <mutex>
 
 using namespace ftxui;
 
@@ -15,9 +16,12 @@ ftxui::Component MakeTerminalView(
 
         const auto& s = sessions[active];
         Elements lines;
-        lines.reserve(s->lines.size());
-        for (const auto& line : s->lines) {
-            lines.push_back(text(line));
+        {
+            std::lock_guard<std::mutex> lock(s->lines_mutex_);
+            lines.reserve(s->lines.size());
+            for (const auto& line : s->lines) {
+                lines.push_back(text(line));
+            }
         }
         if (lines.empty()) lines.push_back(text(""));
 

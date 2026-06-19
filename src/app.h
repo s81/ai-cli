@@ -4,6 +4,7 @@
 #include "platform.h"
 #include "pty/pty.h"
 #include <ftxui/component/screen_interactive.hpp>
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -22,6 +23,8 @@ private:
     std::vector<std::unique_ptr<Session>> sessions_;
     size_t active_ = 0;
     std::filesystem::path store_path_;
+
+    std::atomic<bool> save_pending_{false};
 
     bool        show_dialog_ = false;
     std::string dlg_name_;

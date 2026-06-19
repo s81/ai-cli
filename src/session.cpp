@@ -1,5 +1,40 @@
 #include "session.h"
+#include <mutex>
 #include <sstream>
+
+Session::Session(Session&& o) noexcept
+    : id(std::move(o.id))
+    , name(std::move(o.name))
+    , dir(std::move(o.dir))
+    , command(std::move(o.command))
+    , state(o.state)
+    , created_at(std::move(o.created_at))
+    , last_active(std::move(o.last_active))
+    , lines(std::move(o.lines))
+    , pty(std::move(o.pty))
+    , partial_(std::move(o.partial_))
+    // lines_mutex_ is default-constructed: it belongs to this object, not the source
+{}
+
+Session& Session::operator=(Session&& o) noexcept {
+    if (this != &o) {
+        // lock both in a consistent order to avoid deadlock
+        std::lock(lines_mutex_, o.lines_mutex_);
+        std::lock_guard<std::mutex> lk1(lines_mutex_,   std::adopt_lock);
+        std::lock_guard<std::mutex> lk2(o.lines_mutex_, std::adopt_lock);
+        id          = std::move(o.id);
+        name        = std::move(o.name);
+        dir         = std::move(o.dir);
+        command     = std::move(o.command);
+        state       = o.state;
+        created_at  = std::move(o.created_at);
+        last_active = std::move(o.last_active);
+        lines       = std::move(o.lines);
+        pty         = std::move(o.pty);
+        partial_    = std::move(o.partial_);
+    }
+    return *this;
+}
 
 static std::string strip_ansi(const std::string& in) {
     std::string out;
@@ -41,6 +76,7 @@ void Session::append_output(std::string_view raw) {
     std::string line;
     bool ends_with_newline = !normalized.empty() && normalized.back() == '\n';
 
+    std::lock_guard<std::mutex> lock(lines_mutex_);
     while (std::getline(ss, line)) {
         lines.push_back(std::move(line));
         if (lines.size() > MAX_LINES) lines.pop_front();

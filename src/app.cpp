@@ -69,6 +69,7 @@ void App::start_io_thread(Session* s) {
             }
             if (!s->pty->running()) {
                 s->state = SessionState::Dead;
+                save_pending_.store(true, std::memory_order_release);
                 screen_.PostEvent(Event::Custom);
                 break;
             }
@@ -89,14 +90,40 @@ void App::run() {
 
     bool pty_focused = false;
 
+    // Advance active_ to the next/prev session whose name matches search_query_.
+    // When search_query_ is empty every session matches, so behaviour is identical
+    // to a plain index wrap — no special-casing needed at the call site.
+    auto advance_active = [&](bool forward) {
+        size_t n = sessions_.size();
+        if (n == 0) return;
+        for (size_t step = 1; step < n; ++step) {
+            size_t candidate = forward
+                ? (active_ + step) % n
+                : (active_ + n - step) % n;
+            if (session_matches(sessions_[candidate]->name, search_query_)) {
+                active_ = candidate;
+                return;
+            }
+        }
+        // No other session matches; stay on active_ (it may or may not match).
+    };
+
     auto sidebar_container = Container::Vertical({ search_input, list });
     auto layout = Container::Horizontal({ sidebar_container, term });
 
     auto root = CatchEvent(layout, [&](Event ev) -> bool {
         // ── Global shortcuts ────────────────────────────────────────────
         if (ev == Event::CtrlQ) {
+            save();
             screen_.ExitLoopClosure()();
             return true;
+        }
+        if (ev == Event::Custom) {
+            if (save_pending_.load(std::memory_order_acquire)) {
+                save_pending_.store(false, std::memory_order_relaxed);
+                save();
+            }
+            return false; // let Event::Custom propagate to trigger re-render
         }
         // Ctrl+N (\x0e)
         if (ev == Event::Special("\x0e")) {
@@ -142,12 +169,11 @@ void App::run() {
             return true;
         }
         if (ev == Event::Tab) {
-            if (!sessions_.empty()) active_ = (active_ + 1) % sessions_.size();
+            advance_active(true);
             return true;
         }
         if (ev == Event::TabReverse) {
-            if (!sessions_.empty())
-                active_ = (active_ + sessions_.size() - 1) % sessions_.size();
+            advance_active(false);
             return true;
         }
         if (ev == Event::Return && !sessions_.empty()) {

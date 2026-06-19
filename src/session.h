@@ -2,6 +2,7 @@
 #include "pty/pty.h"
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -18,6 +19,7 @@ struct Session {
 
     static constexpr size_t MAX_LINES = 1000;
     std::deque<std::string> lines;
+    mutable std::mutex lines_mutex_;
 
     std::unique_ptr<Pty> pty; // owns the PTY handle; null for dead/stored sessions
 
@@ -28,8 +30,8 @@ struct Session {
     Session() = default;
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
-    Session(Session&&) = default;
-    Session& operator=(Session&&) = default;
+    Session(Session&&) noexcept;
+    Session& operator=(Session&&) noexcept;
 
 private:
     std::string partial_; // incomplete last line carried across calls
