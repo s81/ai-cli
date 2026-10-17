@@ -30,7 +30,8 @@ void App::save() {
 void App::create_session(const std::string& name, const std::string& dir) {
     auto s        = std::make_unique<Session>();
     s->id         = generate_uuid();
-    s->name       = name.empty() ? "session-" + std::to_string(sessions_.size() + 1) : name;
+    std::string clean = sanitize_display_name(name);
+    s->name       = clean.empty() ? "session-" + std::to_string(sessions_.size() + 1) : clean;
     s->dir        = dir;
     s->command    = "claude";
     s->created_at = current_iso8601();

@@ -5,3 +5,4 @@ dist/
 *.a
 CMakeCache.txt
 CMakeFiles/
+.claude/settings.local.json

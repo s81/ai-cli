@@ -42,6 +42,10 @@ public:
             ::_exit(127);
         }
 
+        // Without this every later session's child would inherit this
+        // master fd and could read or inject keystrokes into this session.
+        ::fcntl(master_fd_, F_SETFD, FD_CLOEXEC);
+
         running_ = true;
         return true;
     }
@@ -61,8 +65,19 @@ public:
 
     void kill() override {
         if (child_ > 0) {
-            ::kill(child_, SIGTERM);
-            ::waitpid(child_, nullptr, WNOHANG);
+            // forkpty made the child a session and process-group leader, so
+            // signal the group: claude's own children (tools, MCP servers)
+            // must not outlive the session the user just killed.
+            ::kill(-child_, SIGTERM);
+            bool reaped = false;
+            for (int i = 0; i < 50 && !reaped; ++i) { // up to ~500 ms grace
+                if (::waitpid(child_, nullptr, WNOHANG) != 0) reaped = true;
+                else ::usleep(10 * 1000);
+            }
+            if (!reaped) {
+                ::kill(-child_, SIGKILL);
+                ::waitpid(child_, nullptr, 0); // reap: no zombie left behind
+            }
             child_ = -1;
         }
         running_ = false;

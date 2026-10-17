@@ -6,13 +6,68 @@
 #include <vector>
 
 #include <atomic>
+#include <cwchar>
+#include <filesystem>
 #include <string>
+#include <system_error>
+
+namespace {
+
+std::wstring utf8_to_wide(const std::string& s) {
+    if (s.empty()) return {};
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    if (n <= 0) return {};
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+    return w;
+}
+
+// Finds `name` (".exe" appended if missing) in the absolute PATH entries only.
+// Letting CreateProcess search instead would try ai-cli's own directory and
+// the current directory first, so a claude.exe planted in whatever folder
+// ai-cli is launched from (a freshly cloned repo, Downloads...) would run.
+std::wstring find_on_path(const std::wstring& name) {
+    namespace fs = std::filesystem;
+    if (name.find_first_of(L"\\/:") != std::wstring::npos) return {}; // bare names only
+
+    std::wstring exe = name;
+    if (exe.size() < 4 || _wcsicmp(exe.c_str() + exe.size() - 4, L".exe") != 0)
+        exe += L".exe";
+
+    DWORD len = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+    if (len == 0) return {};
+    std::wstring path(len, L'\0');
+    len = GetEnvironmentVariableW(L"PATH", path.data(), len);
+    path.resize(len);
+
+    size_t start = 0;
+    while (start <= path.size()) {
+        size_t end = path.find(L';', start);
+        if (end == std::wstring::npos) end = path.size();
+        std::wstring dir = path.substr(start, end - start);
+        start = end + 1;
+
+        if (dir.size() >= 2 && dir.front() == L'"' && dir.back() == L'"')
+            dir = dir.substr(1, dir.size() - 2);
+        if (dir.empty()) continue;
+        fs::path d(dir);
+        if (!d.is_absolute()) continue; // ".", "bin", ... resolve against cwd
+
+        std::error_code ec;
+        fs::path candidate = d / exe;
+        if (fs::is_regular_file(candidate, ec)) return candidate.wstring();
+    }
+    return {};
+}
+
+} // namespace
 
 class PtyWin final : public Pty {
     HPCON  con_        = nullptr;
     HANDLE read_pipe_  = INVALID_HANDLE_VALUE;
     HANDLE write_pipe_ = INVALID_HANDLE_VALUE;
     HANDLE proc_       = INVALID_HANDLE_VALUE;
+    HANDLE job_        = nullptr; // kills the whole process tree with the session
     DWORD  pid_        = 0;
     std::atomic<bool> running_{false};
 
@@ -21,6 +76,9 @@ public:
 
     bool spawn(const std::string& cmd, const std::string& dir,
                int cols, int rows) override {
+        std::wstring app = find_on_path(utf8_to_wide(cmd));
+        if (app.empty()) return false;
+
         HANDLE stdin_r, stdin_w, stdout_r, stdout_w;
         if (!CreatePipe(&stdin_r, &stdin_w, nullptr, 0)) return false;
         if (!CreatePipe(&stdout_r, &stdout_w, nullptr, 0)) {
@@ -37,6 +95,16 @@ public:
         write_pipe_ = stdin_w;
         read_pipe_  = stdout_r;
 
+        // Everything claude starts (node, MCP servers, tool processes) joins
+        // this job and dies with the session, even if ai-cli itself crashes.
+        job_ = CreateJobObjectW(nullptr, nullptr);
+        if (job_) {
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            SetInformationJobObject(job_, JobObjectExtendedLimitInformation,
+                                    &info, sizeof(info));
+        }
+
         SIZE_T attr_size = 0;
         InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
         std::vector<BYTE> attr_buf(attr_size);
@@ -49,18 +117,24 @@ public:
         si.StartupInfo.cb = sizeof(STARTUPINFOEXW);
         si.lpAttributeList = lpAttr;
 
-        std::wstring wcmd(cmd.begin(), cmd.end());
-        std::wstring wdir = dir.empty() ? L"" : std::wstring(dir.begin(), dir.end());
+        // Full path as the application name; quoted path as argv[0].
+        std::wstring wcmd = L"\"" + app + L"\"";
+        std::wstring wdir = utf8_to_wide(dir);
 
         PROCESS_INFORMATION pi{};
         BOOL ok = CreateProcessW(
-            nullptr, wcmd.data(), nullptr, nullptr, FALSE,
-            EXTENDED_STARTUPINFO_PRESENT, nullptr,
-            wdir.empty() ? nullptr : wdir.data(),
+            app.c_str(), wcmd.data(), nullptr, nullptr,
+            FALSE, // inherit no handles
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED, nullptr,
+            wdir.empty() ? nullptr : wdir.c_str(),
             &si.StartupInfo, &pi);
 
         DeleteProcThreadAttributeList(lpAttr);
         if (!ok) return false;
+
+        // Assign before the first instruction runs so no child escapes the job.
+        if (job_) AssignProcessToJobObject(job_, pi.hProcess);
+        ResumeThread(pi.hThread);
 
         proc_    = pi.hProcess;
         pid_     = pi.dwProcessId;
@@ -83,6 +157,11 @@ public:
     }
 
     void kill() override {
+        if (job_) {
+            TerminateJobObject(job_, 1); // the whole tree, not just claude.exe
+            CloseHandle(job_);
+            job_ = nullptr;
+        }
         if (proc_ != INVALID_HANDLE_VALUE) {
             TerminateProcess(proc_, 0);
             CloseHandle(proc_);

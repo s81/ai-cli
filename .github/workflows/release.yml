@@ -5,8 +5,9 @@ on:
     tags:
       - 'v*.*.*'
 
+# Least privilege: only the final release job can write to the repository.
 permissions:
-  contents: write   # needed to create releases and upload assets
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -35,9 +36,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Bootstrap vcpkg
         shell: bash
@@ -58,6 +60,9 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --build-config Release
+
       - name: Strip (Unix)
         if: matrix.strip != ''
         shell: bash
@@ -68,7 +73,7 @@ jobs:
         run: cp ${{ matrix.binary }} ${{ matrix.artifact }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
@@ -76,23 +81,38 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release and upload assets
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist/
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          for f in */*; do
+            (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
+          done > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          # passed via env, never interpolated into the script: a tag name
+          # may contain shell metacharacters such as $( )
+          TAG: ${{ github.ref_name }}
         run: |
-          TAG="${{ github.ref_name }}"
           gh release create "$TAG" \
             --title "ai-cli $TAG" \
             --generate-notes \
             dist/ai-cli-linux-x86_64/ai-cli-linux-x86_64 \
             dist/ai-cli-macos-universal/ai-cli-macos-universal \
-            dist/ai-cli-windows-x86_64.exe/ai-cli-windows-x86_64.exe
+            dist/ai-cli-windows-x86_64.exe/ai-cli-windows-x86_64.exe \
+            dist/SHA256SUMS.txt

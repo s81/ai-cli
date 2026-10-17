@@ -31,7 +31,7 @@ This guide covers installation, daily use, every keyboard shortcut, where data i
 | Terminal | Any modern terminal that supports full-screen apps: Windows Terminal, iTerm2, macOS Terminal, GNOME Terminal, Alacritty, kitty, and so on. Use a window at least 80 columns wide. |
 | OS | Linux x86_64, macOS (Apple Silicon), or Windows 10 1809+ / Windows 11 (ai-cli uses the Windows ConPTY API). |
 
-> **Windows note:** ai-cli starts `claude` directly, not through a shell. Windows only finds `claude.exe` that way. If you installed Claude Code through npm, `claude` is a `.cmd` shim and ai-cli can't start it. See [Troubleshooting](#a-new-session-is-dim-immediately--shows-no-output).
+> **Windows note:** ai-cli starts `claude` directly, not through a shell. For security, it only looks for `claude.exe` in the **absolute** folders on your `PATH`, never in the current directory. If you installed Claude Code through npm, `claude` is a `.cmd` shim and ai-cli can't start it. See [Troubleshooting](#a-new-session-is-dim-immediately--shows-no-output).
 
 ---
 
@@ -72,6 +72,16 @@ The binary isn't signed. The `xattr` step stops Gatekeeper from blocking it. Des
 1. Download `ai-cli-windows-x86_64.exe`.
 2. Rename it to `ai-cli.exe` and move it to a folder on your `PATH`, for example `%USERPROFILE%\bin`.
 3. Run it from Windows Terminal or PowerShell. Double-clicking it works too, but it opens in the older console host.
+
+### Verify the download (recommended)
+
+Releases from the next version onward include a `SHA256SUMS.txt` file. Download it next to the binary and check that they match:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS.txt
+```
+
+On macOS use `shasum -a 256 --check --ignore-missing SHA256SUMS.txt`. On Windows, run `Get-FileHash <file> -Algorithm SHA256` in PowerShell and compare the result. See [SECURITY.md](../SECURITY.md#verifying-a-download).
 
 ### Check the install
 
@@ -222,7 +232,7 @@ ai-cli saves your session list every time you create or kill a session, whenever
 | Linux / macOS | `~/.ai-cli/sessions.json` |
 | Windows | `%APPDATA%\ai-cli\sessions.json` |
 
-The file is written atomically: ai-cli writes to `sessions.json.tmp` and then renames it, so a crash can't leave a half-written file. Example:
+The file is written atomically: ai-cli writes to `sessions.json.tmp` and then renames it, so a crash can't leave a half-written file. On Linux and macOS the file is readable only by you (mode `0600`). Example:
 
 ```json
 {
@@ -273,7 +283,7 @@ ai-cli couldn't start `claude`.
 
 1. Open a normal terminal **in the same directory** and run `claude`. If that fails, fix your Claude Code install first.
 2. Check that the directory you typed in the dialog exists. On Linux and macOS, if it can't be entered, `claude` starts in the launch directory instead.
-3. **Windows:** run `where claude` in PowerShell. If the only result ends in `.cmd` (an npm install), ai-cli can't start it. Install Claude Code with the native Windows installer so `claude.exe` is on your `PATH`.
+3. **Windows:** run `where claude` in PowerShell. If the only result ends in `.cmd` (an npm install), ai-cli can't start it. Install Claude Code with the native Windows installer so `claude.exe` is on your `PATH`. A `claude.exe` in the current folder, or in a relative `PATH` entry such as `.\bin`, is deliberately ignored.
 
 ### Keys I type don't reach Claude
 
@@ -297,7 +307,7 @@ Check that the data file in [Saved sessions](#8-saved-sessions-and-data-files) e
 
 ### Reporting a bug
 
-Open an issue at <https://github.com/s81/ai-cli/issues>. Include your OS, terminal app, the output of `claude --version`, and the steps that cause the problem.
+For security problems, follow [SECURITY.md](../SECURITY.md) and report privately instead of opening an issue. For anything else, open an issue at <https://github.com/s81/ai-cli/issues>. Include your OS, terminal app, the output of `claude --version`, and the steps that cause the problem.
 
 ---
 

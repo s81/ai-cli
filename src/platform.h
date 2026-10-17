@@ -10,15 +10,31 @@
 #  include <windows.h>
 #else
 #  include <csignal>
+#  include <pwd.h>
+#  include <unistd.h>
 #endif
+
+// Returns the env var only if it holds an absolute path. A relative or empty
+// value would put the config (and its temp file) in whatever directory
+// ai-cli happens to be launched from, which may be shared or untrusted.
+inline const char* absolute_env(const char* name) {
+    const char* v = std::getenv(name);
+    if (!v || !*v || !std::filesystem::path(v).is_absolute()) return nullptr;
+    return v;
+}
 
 inline std::filesystem::path config_dir() {
 #ifdef _WIN32
-    const char* appdata = std::getenv("APPDATA");
-    return std::filesystem::path(appdata ? appdata : ".") / "ai-cli";
+    for (const char* var : { "APPDATA", "LOCALAPPDATA", "USERPROFILE" })
+        if (const char* base = absolute_env(var))
+            return std::filesystem::path(base) / "ai-cli";
+    return std::filesystem::path(".") / "ai-cli";
 #else
-    const char* home = std::getenv("HOME");
-    return std::filesystem::path(home ? home : ".") / ".ai-cli";
+    if (const char* home = absolute_env("HOME"))
+        return std::filesystem::path(home) / ".ai-cli";
+    if (const passwd* pw = ::getpwuid(::getuid()); pw && pw->pw_dir && pw->pw_dir[0] == '/')
+        return std::filesystem::path(pw->pw_dir) / ".ai-cli";
+    return std::filesystem::path(".") / ".ai-cli";
 #endif
 }
 

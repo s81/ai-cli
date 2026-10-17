@@ -103,6 +103,10 @@ Binary is at `build/ai-cli` (or `build\Release\ai-cli.exe` on Windows).
 ctest --test-dir build --output-on-failure
 ```
 
+## Security
+
+See [SECURITY.md](SECURITY.md) for the threat model, how to verify downloads, and how to report a vulnerability privately.
+
 ## License
 
 MIT
