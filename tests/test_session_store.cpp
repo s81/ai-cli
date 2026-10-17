@@ -39,7 +39,7 @@ TEST_F(SessionStoreTest, SaveAndLoadRoundTrip) {
     EXPECT_EQ(loaded[0]->name,        "my-proj");
     EXPECT_EQ(loaded[0]->dir,         "/home/user/proj");
     EXPECT_EQ(loaded[0]->command,     "claude");
-    EXPECT_EQ(loaded[0]->state,       SessionState::Dead);
+    EXPECT_EQ(loaded[0]->state.load(), SessionState::Dead);
     EXPECT_EQ(loaded[0]->created_at,  "2026-05-26T00:00:00Z");
     EXPECT_EQ(loaded[0]->last_active, "2026-05-26T01:00:00Z");
 }

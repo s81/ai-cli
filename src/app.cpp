@@ -14,8 +14,13 @@ App::App()
 }
 
 App::~App() {
+    // Signal every reader first so they all wind down in parallel, then join.
+    for (auto& s : sessions_) s->state = SessionState::Dead;
+    for (auto& [s, t] : io_threads_)
+        if (t.joinable()) t.join();
+    io_threads_.clear();
     for (auto& s : sessions_)
-        if (s->pty && s->state == SessionState::Running) s->pty->kill();
+        if (s->pty) s->pty->kill();
 }
 
 void App::save() {
@@ -48,8 +53,8 @@ void App::create_session(const std::string& name, const std::string& dir) {
 void App::kill_active_session() {
     if (active_ >= sessions_.size()) return;
     auto& s = sessions_[active_];
+    stop_io_thread(s.get());
     if (s->pty) s->pty->kill();
-    s->state = SessionState::Dead;
     save();
 }
 
@@ -59,22 +64,37 @@ void App::cycle_next() {
 }
 
 void App::start_io_thread(Session* s) {
-    std::thread([this, s] {
+    io_threads_[s] = std::thread([this, s] {
+        auto on_output = [&](const std::string& data) {
+            s->append_output(data);
+            {
+                std::lock_guard<std::mutex> lock(s->lines_mutex_);
+                s->last_active = current_iso8601();
+            }
+            screen_.PostEvent(Event::Custom);
+        };
         while (s->state == SessionState::Running) {
             auto data = s->pty->read(100);
-            if (!data.empty()) {
-                s->append_output(data);
-                s->last_active = current_iso8601();
-                screen_.PostEvent(Event::Custom);
-            }
+            if (!data.empty()) on_output(data);
             if (!s->pty->running()) {
+                // Pick up whatever the child wrote right before exiting.
+                for (auto rest = s->pty->read(0); !rest.empty(); rest = s->pty->read(0))
+                    on_output(rest);
                 s->state = SessionState::Dead;
                 save_pending_.store(true, std::memory_order_release);
                 screen_.PostEvent(Event::Custom);
                 break;
             }
         }
-    }).detach();
+    });
+}
+
+void App::stop_io_thread(Session* s) {
+    s->state = SessionState::Dead; // reader exits within one read timeout
+    auto it = io_threads_.find(s);
+    if (it == io_threads_.end()) return;
+    if (it->second.joinable()) it->second.join();
+    io_threads_.erase(it);
 }
 
 void App::run() {
@@ -125,6 +145,27 @@ void App::run() {
             }
             return false; // let Event::Custom propagate to trigger re-render
         }
+        // ── PTY pane focused: forward all keys to PTY ───────────────────
+        // Only Ctrl+B and Ctrl+Q are reserved here; everything else (Ctrl+W
+        // word-delete, '?', F1, Ctrl+N ...) belongs to the program in the PTY.
+        if (pty_focused) {
+            // Ctrl+B (\x02) — return focus to sidebar
+            if (ev == Event::Special("\x02")) {
+                pty_focused = false;
+                return true;
+            }
+            // Mouse and terminal reports are not keystrokes; don't leak them.
+            if (ev.is_mouse() || ev.is_cursor_position() || ev.is_cursor_shape())
+                return true;
+            if (active_ < sessions_.size() && sessions_[active_]->pty &&
+                sessions_[active_]->state == SessionState::Running)
+            {
+                sessions_[active_]->pty->write(ev.input());
+            }
+            return true;
+        }
+
+        // ── Sidebar focused ─────────────────────────────────────────────
         // Ctrl+N (\x0e)
         if (ev == Event::Special("\x0e")) {
             dlg_name_.clear(); dlg_dir_.clear();
@@ -136,28 +177,11 @@ void App::run() {
             kill_active_session();
             return true;
         }
-        // F1 or ?
-        if (ev == Event::F1 || ev == Event::Character('?')) {
+        // F1, or ? when not typing a search query
+        if (ev == Event::F1 || (ev == Event::Character('?') && !search_mode_)) {
             show_help_ = !show_help_;
             return true;
         }
-
-        // ── PTY pane focused: forward all keys to PTY ───────────────────
-        if (pty_focused) {
-            // Ctrl+B (\x02) — return focus to sidebar
-            if (ev == Event::Special("\x02")) {
-                pty_focused = false;
-                return true;
-            }
-            if (active_ < sessions_.size() && sessions_[active_]->pty &&
-                sessions_[active_]->state == SessionState::Running)
-            {
-                sessions_[active_]->pty->write(ev.character());
-            }
-            return true;
-        }
-
-        // ── Sidebar focused ─────────────────────────────────────────────
         if (ev == Event::Character('/') && !search_mode_) {
             search_mode_ = true;
             search_query_.clear();
@@ -181,14 +205,16 @@ void App::run() {
             return true;
         }
 
-        return false;
+        // Only the search input consumes the rest, and only while searching;
+        // otherwise stray keys would silently edit a hidden filter.
+        return !search_mode_;
     });
 
     auto renderer = Renderer(root, [&] {
         std::string status = search_mode_
             ? " Esc: exit search"
             : (pty_focused
-               ? " Ctrl+B: sidebar  Ctrl+W: kill  Ctrl+Q: quit"
+               ? " Ctrl+B: sidebar  Ctrl+Q: quit"
                : " ^N new  ^W kill  /: search  Tab: next  Enter: focus  ?: help  ^Q quit");
 
         Element sidebar_content;
@@ -244,6 +270,9 @@ void App::run() {
                 text(" F1 / ?     Toggle this help"),
                 text(" Ctrl+Q     Quit"),
                 separator(),
+                text(" In the PTY pane only ^B and ^Q are") | dim,
+                text(" reserved; other keys go to Claude.") | dim,
+                separator(),
                 text(" Press any key to close") | dim | center,
             }) | border | size(WIDTH, EQUAL, 42);
             ui = dbox({ ui, help | center });
@@ -255,6 +284,11 @@ void App::run() {
     // Dialog + help key handling (outer layer)
     auto top = CatchEvent(renderer, [&](Event ev) -> bool {
         if (show_help_) {
+            // PTY output arrives as Event::Custom; let it through to redraw
+            // and flush saves without dismissing the overlay.
+            if (ev == Event::Custom) return false;
+            if (ev.is_mouse() || ev.is_cursor_position() || ev.is_cursor_shape())
+                return true;
             show_help_ = false;
             return true;
         }

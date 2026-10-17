@@ -1,5 +1,6 @@
 #pragma once
 #include "pty/pty.h"
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -13,13 +14,13 @@ struct Session {
     std::string  name;
     std::string  dir;
     std::string  command   = "claude";
-    SessionState state     = SessionState::Dead;
+    std::atomic<SessionState> state{SessionState::Dead}; // written by the I/O thread
     std::string  created_at;
-    std::string  last_active;
+    std::string  last_active; // guarded by lines_mutex_
 
     static constexpr size_t MAX_LINES = 1000;
     std::deque<std::string> lines;
-    mutable std::mutex lines_mutex_;
+    mutable std::mutex lines_mutex_; // guards lines, partial_ and last_active
 
     std::unique_ptr<Pty> pty; // owns the PTY handle; null for dead/stored sessions
 

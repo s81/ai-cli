@@ -88,18 +88,27 @@ public:
             CloseHandle(proc_);
             proc_ = INVALID_HANDLE_VALUE;
         }
-        if (con_) { ClosePseudoConsole(con_); con_ = nullptr; }
+        // Close our pipe ends before the pseudoconsole: ClosePseudoConsole can
+        // block while conhost still has output queued for a reader.
         if (write_pipe_ != INVALID_HANDLE_VALUE) {
             CloseHandle(write_pipe_); write_pipe_ = INVALID_HANDLE_VALUE;
         }
         if (read_pipe_ != INVALID_HANDLE_VALUE) {
             CloseHandle(read_pipe_); read_pipe_ = INVALID_HANDLE_VALUE;
         }
+        if (con_) { ClosePseudoConsole(con_); con_ = nullptr; }
         running_ = false;
     }
 
     int  pid()     const override { return static_cast<int>(pid_); }
-    bool running() const override { return running_; }
+
+    // ConPTY never signals EOF on the output pipe when the child exits (the
+    // pseudoconsole keeps it open), so ask the process handle directly.
+    bool running() const override {
+        if (!running_) return false;
+        return proc_ != INVALID_HANDLE_VALUE &&
+               WaitForSingleObject(proc_, 0) == WAIT_TIMEOUT;
+    }
 
     std::string read(int timeout_ms = -1) override {
         if (read_pipe_ == INVALID_HANDLE_VALUE) return {};

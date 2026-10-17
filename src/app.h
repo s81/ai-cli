@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 class App {
@@ -26,6 +27,10 @@ private:
 
     std::atomic<bool> save_pending_{false};
 
+    // One reader thread per running session. Joined before the session's PTY
+    // is killed, so the PTY handles are never closed under a pending read.
+    std::unordered_map<Session*, std::thread> io_threads_;
+
     bool        show_dialog_ = false;
     std::string dlg_name_;
     std::string dlg_dir_;
@@ -39,5 +44,6 @@ private:
     void kill_active_session();
     void save();
     void start_io_thread(Session* s);
+    void stop_io_thread(Session* s);
     void cycle_next();
 };

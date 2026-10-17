@@ -76,6 +76,8 @@ Use `Tab` / `Shift+Tab` to cycle through the list, or press `/` and type part of
 
 Select a session and press `Enter` to focus the terminal pane. Type normally — keystrokes go directly to Claude. Press `Ctrl+B` to return to the sidebar at any time.
 
+While the terminal pane is focused, only `Ctrl+B` and `Ctrl+Q` are handled by ai-cli; every other key (including `Ctrl+W`, `Ctrl+N`, `?` and `F1`) is sent to Claude. Those shortcuts work from the sidebar.
+
 ### Session persistence
 
 Sessions are saved to `~/.ai-cli/sessions.json` (Linux/macOS) or `%APPDATA%\ai-cli\sessions.json` (Windows) so they survive restarts.

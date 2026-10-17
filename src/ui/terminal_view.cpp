@@ -24,6 +24,9 @@ ftxui::Component MakeTerminalView(
             }
         }
         if (lines.empty()) lines.push_back(text(""));
+        // yframe scrolls to the focused element; without one it pins the top
+        // and the newest output falls off the bottom of the pane.
+        lines.back() = lines.back() | focus;
 
         return vbox(std::move(lines)) | yframe | flex;
     });

@@ -38,13 +38,18 @@ void save(const std::filesystem::path& path,
     json j;
     j["sessions"] = json::array();
     for (const auto& s : sessions) {
+        std::string last_active;
+        {
+            std::lock_guard<std::mutex> lock(s->lines_mutex_);
+            last_active = s->last_active;
+        }
         j["sessions"].push_back({
             {"id",          s->id},
             {"name",        s->name},
             {"dir",         s->dir},
             {"command",     s->command},
             {"created_at",  s->created_at},
-            {"last_active", s->last_active},
+            {"last_active", last_active},
         });
     }
 

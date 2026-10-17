@@ -7,7 +7,7 @@ Session::Session(Session&& o) noexcept
     , name(std::move(o.name))
     , dir(std::move(o.dir))
     , command(std::move(o.command))
-    , state(o.state)
+    , state(o.state.load())
     , created_at(std::move(o.created_at))
     , last_active(std::move(o.last_active))
     , lines(std::move(o.lines))
@@ -26,7 +26,7 @@ Session& Session::operator=(Session&& o) noexcept {
         name        = std::move(o.name);
         dir         = std::move(o.dir);
         command     = std::move(o.command);
-        state       = o.state;
+        state       = o.state.load();
         created_at  = std::move(o.created_at);
         last_active = std::move(o.last_active);
         lines       = std::move(o.lines);
