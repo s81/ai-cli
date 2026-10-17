@@ -16,6 +16,8 @@ A cross-platform terminal session manager for [Claude Code](https://claude.ai/co
  ^N new  ^W kill  /: search  Tab: next  Enter: focus  ?: help  ^Q quit
 ```
 
+📖 **New here? Read the [User Guide](docs/user-guide.md)**: setup, every shortcut, data files, limitations and troubleshooting.
+
 ## Installation
 
 Download the binary for your platform from the [latest release](https://github.com/s81/ai-cli/releases/latest):
