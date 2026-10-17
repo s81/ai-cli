@@ -37,8 +37,9 @@ std::wstring find_on_path(const std::wstring& name) {
     DWORD len = GetEnvironmentVariableW(L"PATH", nullptr, 0);
     if (len == 0) return {};
     std::wstring path(len, L'\0');
-    len = GetEnvironmentVariableW(L"PATH", path.data(), len);
-    path.resize(len);
+    DWORD got = GetEnvironmentVariableW(L"PATH", path.data(), len);
+    if (got == 0 || got >= len) return {}; // failed, or PATH grew in between
+    path.resize(got);
 
     size_t start = 0;
     while (start <= path.size()) {
@@ -107,11 +108,16 @@ public:
 
         SIZE_T attr_size = 0;
         InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
+        if (attr_size == 0) return false;
         std::vector<BYTE> attr_buf(attr_size);
         auto lpAttr = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attr_buf.data());
-        InitializeProcThreadAttributeList(lpAttr, 1, 0, &attr_size);
-        UpdateProcThreadAttribute(lpAttr, 0,
-            PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, con_, sizeof(con_), nullptr, nullptr);
+        // Never touch (or delete) a list that failed to initialize.
+        if (!InitializeProcThreadAttributeList(lpAttr, 1, 0, &attr_size)) return false;
+        if (!UpdateProcThreadAttribute(lpAttr, 0,
+                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, con_, sizeof(con_), nullptr, nullptr)) {
+            DeleteProcThreadAttributeList(lpAttr);
+            return false;
+        }
 
         STARTUPINFOEXW si{};
         si.StartupInfo.cb = sizeof(STARTUPINFOEXW);

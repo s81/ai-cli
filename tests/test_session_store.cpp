@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -93,6 +94,26 @@ TEST_F(SessionStoreTest, SaveSurvivesInvalidUtf8) {
     sessions[0]->dir = "bad\xFF\xFE";
     EXPECT_NO_THROW(SessionStore::save(path_, sessions));
     EXPECT_EQ(SessionStore::load(path_).size(), 1u);
+}
+
+TEST_F(SessionStoreTest, SaveWhileOutputArrivesIsRaceFree) {
+    std::vector<std::unique_ptr<Session>> sessions;
+    sessions.push_back(std::make_unique<Session>());
+    Session* s = sessions[0].get();
+    std::thread io([s] {
+        for (int i = 0; i < 2000; ++i) {
+            s->append_output("x
+");
+            std::lock_guard<std::mutex> lk(s->lines_mutex_);
+            s->last_active = "t" + std::to_string(i);
+        }
+    });
+    for (int i = 0; i < 50; ++i) SessionStore::save(path_, sessions);
+    io.join();
+    SessionStore::save(path_, sessions);
+    auto v = SessionStore::load(path_);
+    ASSERT_EQ(v.size(), 1u);
+    EXPECT_EQ(v[0]->last_active, "t1999");
 }
 
 #ifndef _WIN32

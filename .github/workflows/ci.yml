@@ -50,3 +50,53 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --build-config Release
+
+  # Memory and thread safety: run the full test suite under sanitizers.
+  # Any heap/stack overflow, use-after-free, leak, undefined behaviour or
+  # data race fails the job.
+  sanitizers:
+    name: sanitizer (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: address+undefined
+            flags: -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g -O1 -D_GLIBCXX_ASSERTIONS
+            link: -fsanitize=address,undefined
+          - name: thread
+            flags: -fsanitize=thread -fno-omit-frame-pointer -g -O1
+            link: -fsanitize=thread
+
+    runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=1:abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1:check_initialization_order=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # Ubuntu 24.04 runners use high-entropy ASLR, which the sanitizer
+      # runtimes cannot map around.
+      - name: Lower ASLR entropy for sanitizers
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Bootstrap vcpkg
+        run: ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      - name: Configure
+        run: >
+          cmake -B build -S .
+          -DCMAKE_TOOLCHAIN_FILE=vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="${{ matrix.flags }}"
+          -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.link }}"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

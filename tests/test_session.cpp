@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 #include "session.h"
+#include <atomic>
+#include <mutex>
+#include <string>
+#include <thread>
 
 TEST(Session, AppendOutputSplitsOnNewlines) {
     Session s;
@@ -66,14 +70,14 @@ TEST(SessionSecurity, StripsOscTitleSequence) {
 
 TEST(SessionSecurity, StripsOscTerminatedByStringTerminator) {
     Session s;
-    s.append_output("\x1b]52;c;ZXZpbA==\x1b\after\n"); // OSC 52 clipboard write
+    s.append_output("\x1b]52;c;ZXZpbA==\x1b\\after\n"); // OSC 52 clipboard write
     ASSERT_EQ(s.lines.size(), 1u);
     EXPECT_EQ(s.lines[0], "after");
 }
 
 TEST(SessionSecurity, StripsDcsSequence) {
     Session s;
-    s.append_output("\x1bPq#0;2;0;0;0\x1b\ok\n");
+    s.append_output("\x1bPq#0;2;0;0;0\x1b\\ok\n");
     ASSERT_EQ(s.lines.size(), 1u);
     EXPECT_EQ(s.lines[0], "ok");
 }
@@ -149,4 +153,40 @@ TEST(SanitizeDisplayName, TruncatesOnUtf8Boundary) {
     std::string name = std::string(63, 'a') + "\xC3\xA9"; // 65 bytes, é straddles 64
     auto out = sanitize_display_name(name, 64);
     EXPECT_EQ(out, std::string(63, 'a'));
+}
+
+// ── Concurrency: mirrors the app's I/O thread (writer) and UI thread
+//    (reader). Run under ThreadSanitizer in CI to prove the locking. ─────
+
+TEST(SessionConcurrency, ReaderAndWriterShareLinesSafely) {
+    Session s;
+    std::atomic<bool> done{false};
+    std::thread writer([&] {
+        for (int i = 0; i < 20000; ++i) {
+            s.append_output("line [1mbold[0m " + std::to_string(i) + "
+");
+            std::lock_guard<std::mutex> lk(s.lines_mutex_);
+            s.last_active = std::to_string(i);
+        }
+        done = true;
+    });
+    size_t observed = 0;
+    while (!done) {
+        std::lock_guard<std::mutex> lk(s.lines_mutex_);
+        for (const auto& l : s.lines) observed += l.size();
+        observed += s.last_active.size();
+    }
+    writer.join();
+    (void)observed;
+    EXPECT_EQ(s.lines.size(), Session::MAX_LINES);
+    EXPECT_EQ(s.lines.back(), "line bold 19999");
+}
+
+TEST(SessionConcurrency, StateIsSafeToFlipAcrossThreads) {
+    Session s;
+    s.state = SessionState::Running;
+    std::thread t([&] { s.state = SessionState::Dead; });
+    while (s.state == SessionState::Running) std::this_thread::yield();
+    t.join();
+    EXPECT_EQ(s.state.load(), SessionState::Dead);
 }
